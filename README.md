@@ -51,3 +51,7 @@ This file captures the original system prompt describing what we are building an
 - Simulate worker responses initially; structure ready for real endpoints.
 - Run with `uvicorn main:app --reload` and open http://localhost:8000/.
 - Add new worker by updating registry and providing endpoint/command; planner auto-considers via description/intents.
+
+## Running Screenshot
+<img width="2058" height="3168" alt="Supervisor Frontend" src="https://github.com/user-attachments/assets/f879d1ba-9cc2-49fe-8825-cbeba037e25c" />
+
