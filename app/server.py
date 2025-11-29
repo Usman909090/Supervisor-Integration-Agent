@@ -56,27 +56,36 @@ def build_app() -> FastAPI:
         file_uploads = []
         query_text = payload.query
         # Pattern: [FILE_UPLOAD:data:mime;base64,base64data:filename:mime_type]
-        # Need to handle data URL which contains colons, so we match from the end
-        file_pattern = r'\[FILE_UPLOAD:(.+?):([^:]+):([^\]]+)\]'
+        # Match from the end since data URL contains colons
+        # Format: [FILE_UPLOAD:<data_url>:<filename>:<mime_type>]
+        file_pattern = r'\[FILE_UPLOAD:(.+):([^:]+):([^\]]+)\]'
         matches = re.findall(file_pattern, query_text)
         
-        for data_url_part, filename, mime_type in matches:
+        for match in matches:
+            # match[0] = data URL part (contains colons)
+            # match[1] = filename (no colons)
+            # match[2] = mime_type (no brackets)
+            data_url_part = match[0]
+            filename = match[1]
+            mime_type = match[2]
+            
             # Extract base64 data from data URL
             # Format: data:application/...;base64,<base64data>
             if 'base64,' in data_url_part:
                 base64_data = data_url_part.split('base64,')[1]
-            elif data_url_part.startswith('data:'):
-                # Fallback: try to split by comma
-                base64_data = data_url_part.split(',')[1] if ',' in data_url_part else data_url_part
+            elif ',' in data_url_part:
+                # Fallback: split by comma and take last part
+                base64_data = data_url_part.split(',')[-1]
             else:
                 base64_data = data_url_part
+                
             file_uploads.append({
                 'base64_data': base64_data,
                 'filename': filename,
                 'mime_type': mime_type
             })
             # Remove file upload markers from query text
-            query_text = re.sub(file_pattern, f'[Uploaded file: {filename}]', query_text)
+            query_text = re.sub(r'\[FILE_UPLOAD:' + re.escape(data_url_part) + r':' + re.escape(filename) + r':' + re.escape(mime_type) + r'\]', f'[Uploaded file: {filename}]', query_text)
 
         plan = plan_tools_with_llm(query_text, registry, history=history)
 
