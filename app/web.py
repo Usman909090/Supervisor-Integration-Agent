@@ -285,6 +285,7 @@ def render_home() -> HTMLResponse:
             const [error, setError] = useState(null);
             const [openIntermediate, setOpenIntermediate] = useState(false);
             const [conversationId, setConversationId] = useState(initialConv);
+            const [fileName, setFileName] = useState('');
 
             useEffect(() => {
               fetch('/api/agents').then((r) => r.json()).then(setAgents).catch(() => setAgents([]));
@@ -332,6 +333,42 @@ def render_home() -> HTMLResponse:
               } catch {}
             };
 
+            const handleFileUpload = (e) => {
+              const file = e.target.files[0];
+              if (!file) return;
+              
+              setFileName(file.name);
+              setStatus('Reading file...');
+              
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const fileContent = event.target.result;
+                // If query is empty or just placeholder, replace it; otherwise append
+                if (!query.trim() || query === 'Summarize our project status and flag any deadline risks.') {
+                  setQuery(`Summarize this document:\n\n${fileContent}`);
+                } else {
+                  setQuery(`${query}\n\n--- Document Content ---\n\n${fileContent}`);
+                }
+                setStatus('');
+              };
+              reader.onerror = () => {
+                setStatus('');
+                setError({ message: 'Failed to read file', type: 'file_error' });
+                setFileName('');
+              };
+              
+              // Read as text for text files, or try to read as text for other files
+              if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md') || 
+                  file.name.endsWith('.json') || file.name.endsWith('.csv') || file.name.endsWith('.log')) {
+                reader.readAsText(file);
+              } else {
+                // For binary files like PDF, DOCX, show a message
+                setStatus('');
+                setError({ message: `File type ${file.type || 'unknown'} not supported for direct text reading. Please use the document URL feature or paste the content manually.`, type: 'file_error' });
+                setFileName('');
+              }
+            };
+
             // Compute orbit positions (percent-based radii to keep within bounds)
             const orbitPositions = useMemo(() => {
               const rings = [34, 42, 48]; // percent radii from center for three orbits
@@ -363,7 +400,14 @@ def render_home() -> HTMLResponse:
 
                 <div>
                   <label className="section-title">Your request</label>
-                  <textarea value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Type your question here..." />
+                  <textarea value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Type your question here or upload a file..." />
+                  <div style={{ marginTop: 8, marginBottom: 8 }}>
+                    <label style={{ display: 'inline-block', cursor: 'pointer', fontSize: '13px', color: 'var(--muted)' }}>
+                      <input type="file" onChange={handleFileUpload} accept=".txt,.md,.json,.csv,.log,text/*" style={{ display: 'none' }} />
+                      <span style={{ textDecoration: 'underline' }}>📎 Upload text file</span>
+                      {fileName && <span style={{ marginLeft: 8, color: 'var(--accent)' }}>({fileName})</span>}
+                    </label>
+                  </div>
                   <div className="controls">
                     <label className="checkbox">
                       <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} /> Show debug
