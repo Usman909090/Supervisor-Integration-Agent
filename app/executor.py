@@ -4,10 +4,16 @@ outputs for later synthesis or UI debugging.
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, List, Tuple
 
+try:
+    import httpx  # type: ignore
+except ImportError:
+    httpx = None
+
 from .agent_caller import call_agent
-from .models import AgentMetadata, AgentResponse, Plan, UsedAgentEntry
+from .models import AgentMetadata, AgentRequest, AgentResponse, ErrorModel, Plan, UsedAgentEntry
 from .registry import find_agent_by_name
 
 
@@ -29,6 +35,9 @@ def resolve_input(input_source: str, user_query: str, step_outputs: Dict[int, Ag
     return user_query
 
 
+
+
+
 async def execute_plan(
     query: str,
     plan: Plan,
@@ -48,5 +57,36 @@ async def execute_plan(
         used_agents.append(
             UsedAgentEntry(name=agent_meta.name, intent=step.intent, status=response.status)
         )
+        
+        # Auto-trigger TDA after KnowledgeBaseBuilderAgent successfully creates tasks
+        if (step.agent == "KnowledgeBaseBuilderAgent" and 
+            response.status == "success" and 
+            step.intent == "create_task"):
+            try:
+                tda_meta = find_agent_by_name("task_dependency_agent", registry)
+                # Call TDA with database trigger - it will retrieve tasks from MongoDB
+                tda_response = await call_agent(
+                    tda_meta,
+                    "task.resolve_dependencies",
+                    "",  # Empty text since TDA uses trigger
+                    context,
+                    custom_input={"trigger": "database_update"}  # Signal to retrieve from DB
+                )
+                # Add TDA to outputs with next step_id
+                next_step_id = max(step_outputs.keys()) + 1 if step_outputs else 0
+                step_outputs[next_step_id] = tda_response
+                used_agents.append(
+                    UsedAgentEntry(
+                        name=tda_meta.name,
+                        intent="task.resolve_dependencies",
+                        status=tda_response.status
+                    )
+                )
+            except KeyError:
+                # TDA not found in registry, skip auto-trigger
+                pass
+            except Exception:
+                # TDA call failed, continue without blocking
+                pass
 
     return step_outputs, used_agents

@@ -73,7 +73,7 @@ def plan_tools_with_llm(query: str, registry: List[AgentMetadata], history: Opti
     # calling unrelated agents. If none of the heuristics match and the LLM is
     # unavailable, we declare out of scope (no steps).
     lower_q = query.lower()
-    if any(keyword in lower_q for keyword in ["create task", "new task", "add task", "task:", "i need to", "implement", "fix bug", "deadline"]):
+    if any(keyword in lower_q for keyword in ["create task", "new task", "add task", "task:", "i need to", "implement", "fix bug"]):
         return Plan(
             steps=[
                 PlanStep(
@@ -129,13 +129,13 @@ def plan_tools_with_llm(query: str, registry: List[AgentMetadata], history: Opti
                 )
             ]
         )
-    if any(keyword in lower_q for keyword in ["dependency", "depends on", "blocked by"]):
+    if any(keyword in lower_q for keyword in ["dependency", "depends on", "blocked by", "analyze dependencies"]):
         return Plan(
             steps=[
                 PlanStep(
                     step_id=0,
                     agent="task_dependency_agent",
-                    intent="tasks.dependencies",
+                    intent="task.resolve_dependencies",
                     input_source="user_query",
                 )
             ]

@@ -65,11 +65,12 @@ def load_registry() -> List[AgentMetadata]:
         ),
         AgentMetadata(
             name="task_dependency_agent",
-            description="Analyzes dependencies between tasks in a project.",
-            intents=["tasks.dependencies"],
+            description="Analyzes task dependencies using LLM inference. Automatically retrieves tasks from MongoDB, infers dependencies between them, calculates execution order, and updates the database. Triggered after KnowledgeBaseBuilderAgent creates tasks.",
+            intents=["task.resolve_dependencies"],
             type="http",
-            endpoint="https://example.com/tasks/handle",
-            healthcheck="https://example.com/tasks/health",
+            endpoint="https://task-dependency-agent.vercel.app/task",
+            healthcheck="https://task-dependency-agent.vercel.app/health",
+            timeout_ms=30000,
         ),
         AgentMetadata(
             name="deadline_guardian_agent",
