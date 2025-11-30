@@ -1,17 +1,15 @@
 """
 Focus Enforcer Agent HTTP Service Wrapper.
 
-This module wraps the Focus Enforcer Agent logic to expose it as an HTTP endpoint
-compatible with the Supervisor's handshake contract.
-
 Architecture:
-- Focus Enforcer receives deadline data FROM THE SUPERVISOR (not fetching directly)
+- Focus Enforcer receives deadline data FROM THE SUPERVISOR
 - Supervisor orchestrates: Deadline Guardian -> Focus Enforcer
 - This agent focuses on: window monitoring, LLM analysis, OS-level popups/notifications
 """
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -175,23 +173,30 @@ def _show_windows_popup(title: str, message: str, level: str):
         flags = MB_OK | MB_ICONSTOP | MB_SYSTEMMODAL
     
     try:
+        # Running strictly in a thread executor to avoid blocking main thread
         ctypes.windll.user32.MessageBoxW(0, message, title, flags)
         logger.info(f"Windows popup displayed: [{level}] {title}")
     except Exception as e:
         logger.error(f"Failed to show Windows popup: {e}")
 
 
-def _handle_intervention(command: str):
+async def _handle_intervention(command: str):
     """Parses the Agent command and triggers the actual OS-level intervention."""
+    if not command:
+        return
+
+    loop = asyncio.get_running_loop()
+
     if command.startswith("STRICT POPUP:"):
         message = command.replace("STRICT POPUP:", "").strip()
         logger.critical(f"EXECUTING STRICT POPUP: {message}")
-        _show_windows_popup("FOCUS ENFORCER - STRICT ALERT", message, "critical")
+        # Run blocking UI call in executor
+        await loop.run_in_executor(None, _show_windows_popup, "FOCUS ENFORCER - STRICT ALERT", message, "critical")
         
     elif command.startswith("NOTIFY:"):
         message = command.replace("NOTIFY:", "").strip()
         logger.warning(f"EXECUTING NOTIFICATION: {message}")
-        _show_windows_popup("Focus Enforcer - Reminder", message, "info")
+        await loop.run_in_executor(None, _show_windows_popup, "Focus Enforcer - Reminder", message, "info")
         
     elif command == "CONTINUE MONITORING":
         logger.info("Focus confirmed. No intervention needed.")
@@ -215,8 +220,8 @@ def get_active_window_title() -> str:
         logger.warning("pygetwindow not installed. Using placeholder.")
         return "Unknown Window (pygetwindow not installed)"
     except Exception as e:
-        logger.warning(f"Failed to get active window: {e}")
-        return "Unknown Window"
+        # Often happens if screen is locked or permission denied
+        return f"System Idle / Unknown ({str(e)})"
 
 
 async def monitor_loop():
@@ -230,6 +235,11 @@ async def monitor_loop():
         try:
             # Capture current window
             window_title = get_active_window_title()
+            
+            # --- LOGGING ADDED HERE ---
+            logger.info(f"[🪟 WINDOW CHECK] Active: {window_title}")
+            # --------------------------
+
             state.activity_history.append({
                 "timestamp": time.time(),
                 "window_title": window_title
@@ -241,7 +251,8 @@ async def monitor_loop():
             
             # Run analysis every interval
             if time.time() - last_analysis_time >= analysis_interval:
-                analysis = analyze_focus({
+                # IMPORTANT: await the async analysis
+                analysis = await analyze_focus({
                     "paa_data": state.paa_data,
                     "dg_data": state.dg_data,
                     "activity_history": state.activity_history,
@@ -250,7 +261,7 @@ async def monitor_loop():
                 
                 state.last_analysis = analysis
                 last_analysis_time = time.time()
-                logger.info(f"Analysis complete: {analysis['focus_state']} (score: {analysis['productivity_score']})")
+                logger.info(f"Analysis complete: {analysis.get('focus_state')} (score: {analysis.get('productivity_score')})")
             
             await asyncio.sleep(5)  # Check window every 5 seconds
             
@@ -284,68 +295,65 @@ ANALYSIS_SCHEMA = {
 
 def create_system_prompt(paa_data: Dict[str, Any], dg_data: Dict[str, Any], 
                          history: List[Dict[str, Any]], hourly_summary: List[Dict[str, Any]]) -> str:
-    """Constructs the system prompt for focus analysis."""
+    """Constructs the system prompt for focus analysis with Recency Emphasis."""
     
     task = paa_data.get("goal", "an undefined project task")
     deadline = dg_data.get("critical_deadline", dg_data.get("next_deadline", "TBD"))
     deadline_risk = dg_data.get("deadline_risk", dg_data.get("risk_level", "unknown"))
     target_apps = paa_data.get('target_apps', 'Not specified')
     
-    # Format activity log
+    # Format activity log (Last 20 entries are crucial)
+    history_subset = history[-20:] if history else []
     history_str = "\n".join([
         f"[{time.strftime('%H:%M:%S', time.localtime(h['timestamp']))}] Window: {h['window_title']}" 
-        for h in history
-    ]) if history else "No activity recorded yet."
-    
-    # Format hourly summary
-    hourly_str = "No previous hours tracked."
-    if hourly_summary:
-        hourly_str = "\n".join([
-            f"- Hour: {time.strftime('%H:%M', time.localtime(h['start_time']))}, Status: {h['status']}, Score: {h['score']}/100" 
-            for h in hourly_summary
-        ])
+        for h in history_subset
+    ]) if history_subset else "No activity recorded yet."
     
     schema_str = json.dumps(ANALYSIS_SCHEMA, indent=2)
 
     return f"""
-    SYSTEM ROLE: You are the Focus Enforcer AI, analyzing user activity for focus assessment.
+    SYSTEM ROLE: You are the Focus Enforcer AI.
 
-    --- FOCUS ASSESSMENT FRAMEWORK ---
-    1. Extract Productive Keywords (PKs): 3-5 keywords related to the task and target apps.
-    2. Extract Distraction Keywords (DKs): Common distractions (YouTube, Reddit, Social Media, etc.).
-    3. Calculate Focus Score (0-100): Start at 100, +2 for productive entries, -10 for distractions.
-    4. Determine Status: DISTRACTED if score < 70 or 60+ seconds on distractions; FOCUSED otherwise.
-    5. Generate Command: 
-       - Score < 40 or 5+ distractions: "STRICT POPUP: [firm message]"
-       - Score 40-69: "NOTIFY: [supportive reminder]"  
-       - Score >= 70: "CONTINUE MONITORING"
-    
-    --- CONTEXT (from Deadline Guardian) ---
+    --- RULES FOR ANALYSIS ---
+    1. **RECENCY IS KING**: Look at the LAST 5 entries in the "RECENT ACTIVITY" log. 
+       - If the user is currently in a Target App (e.g., VS Code), they are FOCUSED, even if previous history was bad.
+       - Do NOT trigger a STRICT POPUP if the user has already returned to work.
+    2. **Scoring**: 
+       - If current window is productive: Score must be > 60.
+       - If current window is distraction: Score penalty applies.
+    3. **Commands**:
+       - "STRICT POPUP": Only if the user is *currently* distracted AND score is low.
+       - "CONTINUE MONITORING": If the user is currently working.
+
+    --- CONTEXT ---
+    Target Apps: {target_apps}
     Task: {task}
     Deadline: {deadline}
-    Deadline Risk Level: {deadline_risk}
-    Target Apps: {target_apps}
+    Risk: {deadline_risk}
     
-    HOURLY HISTORY:
-    {hourly_str}
-    
-    RECENT ACTIVITY:
+    RECENT ACTIVITY (Last 20 entries):
     {history_str}
     
     --- OUTPUT SCHEMA ---
     {schema_str}
     
-    Respond with ONLY valid JSON matching the schema. No markdown or extra text.
+    Respond with ONLY valid JSON matching the schema.
     """
 
 
-def analyze_focus(input_data: Dict[str, Any], execute_intervention: bool = False) -> Dict[str, Any]:
-    """Analyze focus using LLM or fallback logic."""
+async def analyze_focus(input_data: Dict[str, Any], execute_intervention: bool = False) -> Dict[str, Any]:
+    """
+    Analyze focus using LLM or fallback logic.
+    CRITICAL CHANGE: Now Async to prevent blocking the event loop during network requests.
+    """
     
     paa_data = input_data.get("paa_data", state.paa_data)
     dg_data = input_data.get("dg_data", state.dg_data)
     activity_history = input_data.get("activity_history", state.activity_history)
     hourly_summary = input_data.get("hourly_summary", state.hourly_summary)
+    
+    # --- 1. LLM ANALYSIS ---
+    analysis = {}
     
     if not co:
         analysis = get_fallback_analysis("Cohere client not available", activity_history)
@@ -354,15 +362,27 @@ def analyze_focus(input_data: Dict[str, Any], execute_intervention: bool = False
             system_prompt = create_system_prompt(paa_data, dg_data, activity_history, hourly_summary)
             messages = [{"role": "user", "content": system_prompt}]
             
-            response = co.chat(model='command-a-03-2025', messages=messages, temperature=0.0)
+            # Use run_in_executor to prevent blocking the async loop
+            loop = asyncio.get_running_loop()
+            
+            # MODEL CHANGED: command-r-plus is deprecated -> command-a-03-2025
+            chat_func = functools.partial(
+                co.chat,
+                model='command-a-03-2025', 
+                messages=messages, 
+                temperature=0.0
+            )
+            
+            response = await loop.run_in_executor(None, chat_func)
             
             if response and response.message and response.message.content:
                 raw_text = response.message.content[0].text.strip()
                 
-                if raw_text.startswith('\`\`\`json'):
-                    raw_text = raw_text.split('\n', 1)[1].rsplit('\`\`\`', 1)[0]
-                elif raw_text.startswith('\`\`\`'):
-                    raw_text = raw_text.split('\n', 1)[1].rsplit('\`\`\`', 1)[0]
+                # Cleanup markdown code blocks if present
+                if raw_text.startswith('```json'):
+                    raw_text = raw_text.split('\n', 1)[1].rsplit('```', 1)[0]
+                elif raw_text.startswith('```'):
+                    raw_text = raw_text.split('\n', 1)[1].rsplit('```', 1)[0]
                 
                 llm_result = json.loads(raw_text)
                 
@@ -381,10 +401,29 @@ def analyze_focus(input_data: Dict[str, Any], execute_intervention: bool = False
         except json.JSONDecodeError as e:
             analysis = get_fallback_analysis(f"JSON parse error: {e}", activity_history)
         except Exception as e:
-            analysis = get_fallback_analysis(f"LLM error: {e}", activity_history)
+            logger.error(f"LLM API Error: {e}")
+            analysis = get_fallback_analysis(f"LLM error: {str(e)[:50]}...", activity_history)
     
+    # --- 2. RECENCY OVERRIDE (Fix for Lag) ---
+    if activity_history:
+        current_window = activity_history[-1].get('window_title', '').lower()
+        target_apps_str = paa_data.get('target_apps', '').lower()
+        target_apps = [t.strip() for t in target_apps_str.split(',') if t.strip()]
+        
+        # Check if the CURRENT window matches any target app
+        is_currently_working = any(app in current_window for app in target_apps)
+        
+        if is_currently_working:
+            if "STRICT POPUP" in analysis.get("supervisor_command", ""):
+                logger.info(f"Override: User is currently in '{current_window}' (Target). Downgrading strict popup.")
+                analysis["supervisor_command"] = "CONTINUE MONITORING"
+                analysis["focus_state"] = "RECOVERING"
+                analysis["reasoning"] += " [System Override: User returned to target app]"
+                analysis["intervention_needed"] = False
+
+    # --- 3. EXECUTE INTERVENTION ---
     if execute_intervention and analysis.get("supervisor_command"):
-        _handle_intervention(analysis["supervisor_command"])
+        await _handle_intervention(analysis["supervisor_command"])
     
     return analysis
 
@@ -394,9 +433,13 @@ def get_fallback_analysis(reason: str, activity_history: List[Dict[str, Any]]) -
     logger.warning(f"Using fallback analysis: {reason}")
     
     distraction_keywords = ['youtube', 'reddit', 'twitter', 'facebook', 'instagram', 
-                           'netflix', 'hulu', 'game', 'discord', 'tiktok']
+                            'netflix', 'hulu', 'game', 'discord', 'tiktok', 'friv', 'hianime']
     
     distraction_count = 0
+    current_window = ""
+    if activity_history:
+        current_window = activity_history[-1].get('window_title', '').lower()
+        
     for entry in activity_history:
         title = entry.get('window_title', '').lower()
         if any(dk in title for dk in distraction_keywords):
@@ -405,19 +448,23 @@ def get_fallback_analysis(reason: str, activity_history: List[Dict[str, Any]]) -
     total_entries = len(activity_history) if activity_history else 1
     distraction_ratio = distraction_count / total_entries
     score = max(0, int(100 - (distraction_ratio * 100)))
-    is_focused = score >= 70
     
-    if score < 40:
-        command = "STRICT POPUP: Your focus has dropped significantly. Please return to your task immediately."
-    elif score < 70:
-        command = "NOTIFY: You seem distracted. Consider refocusing on your current task."
+    is_currently_distracted = any(dk in current_window for dk in distraction_keywords)
+    
+    if is_currently_distracted:
+        if score < 40:
+            command = "STRICT POPUP: Your focus has dropped significantly. Please return to your task immediately."
+        elif score < 70:
+            command = "NOTIFY: You seem distracted. Consider refocusing on your current task."
+        else:
+            command = "CONTINUE MONITORING"
     else:
         command = "CONTINUE MONITORING"
     
     return {
-        "focus_state": "FOCUSED" if is_focused else "DISTRACTED",
+        "focus_state": "FOCUSED" if not is_currently_distracted else "DISTRACTED",
         "productivity_score": score,
-        "intervention_needed": not is_focused,
+        "intervention_needed": is_currently_distracted,
         "supervisor_command": command,
         "reasoning": f"Fallback analysis ({reason}): {distraction_count}/{total_entries} distraction entries.",
         "productive_keywords": [],
@@ -430,12 +477,8 @@ def get_fallback_analysis(reason: str, activity_history: List[Dict[str, Any]]) -
 # =============================================================================
 
 def parse_deadline_data_from_input(text: str) -> Dict[str, Any]:
-    """
-    Parse deadline data that came from Deadline Guardian via Supervisor.
-    The Supervisor passes the output of step:0 (Deadline Guardian) as the input text.
-    """
+    """Parse deadline data that came from Deadline Guardian via Supervisor."""
     try:
-        # Try to parse as JSON (Supervisor passes structured output)
         data = json.loads(text)
         return {
             "critical_deadline": data.get("next_deadline", data.get("critical_deadline", "TBD")),
@@ -443,7 +486,6 @@ def parse_deadline_data_from_input(text: str) -> Dict[str, Any]:
             "deadlines": data.get("deadlines", [])
         }
     except (json.JSONDecodeError, TypeError):
-        # If not JSON, treat as plain text description
         return {
             "critical_deadline": text if text else "TBD",
             "deadline_risk": "unknown",
@@ -467,7 +509,6 @@ async def handle_start_monitoring(request: SupervisorRequest) -> SupervisorRespo
     dg_data = parse_deadline_data_from_input(request.input.text)
     state.dg_data = dg_data
     
-    # Extract goal/target apps from metadata if provided
     extra = request.input.metadata.extra
     state.paa_data = {
         "goal": extra.get("goal", "Complete current tasks"),
@@ -479,11 +520,9 @@ async def handle_start_monitoring(request: SupervisorRequest) -> SupervisorRespo
     state.activity_history = []
     state.hourly_summary = []
     
-    # Start background monitoring
     state.focus_task = asyncio.create_task(monitor_loop())
     
     logger.info(f"Focus monitoring started for user {state.user_id}")
-    logger.info(f"Deadline context: {dg_data}")
     
     return SupervisorResponse(
         request_id=request.request_id,
@@ -525,7 +564,6 @@ async def handle_stop_monitoring(request: SupervisorRequest) -> SupervisorRespon
             pass
         state.focus_task = None
     
-    # Prepare summary
     summary = {
         "message": "Focus monitoring stopped",
         "status": "stopped",
@@ -545,11 +583,9 @@ async def handle_stop_monitoring(request: SupervisorRequest) -> SupervisorRespon
 
 async def handle_analyze_focus(request: SupervisorRequest) -> SupervisorResponse:
     """Analyze current focus state with deadline context from Supervisor."""
-    
     dg_data = parse_deadline_data_from_input(request.input.text)
     
-    # Use current state's activity or empty if not monitoring
-    analysis = analyze_focus({
+    analysis = await analyze_focus({
         "paa_data": state.paa_data,
         "dg_data": dg_data,
         "activity_history": state.activity_history,
@@ -606,7 +642,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Focus Enforcer Agent",
     description="Monitors user focus and productivity with OS-level interventions",
-    version="2.0.0",
+    version="2.1.2", # Version bump for log change
     lifespan=lifespan
 )
 
@@ -618,7 +654,8 @@ async def health_check():
         "status": "healthy",
         "agent": "focus_enforcer_agent",
         "monitoring_active": state.is_running,
-        "cohere_available": co is not None
+        "cohere_available": co is not None,
+        "model": "command-a-03-2025"
     }
 
 
@@ -674,8 +711,14 @@ async def legacy_start_focus(request: StartFocusRequest):
         agent_name="focus_enforcer_agent",
         intent="focus.start_monitoring",
         input=AgentInput(text=request.critical_deadline),
-        context=AgentContext(user_id=request.user_id)
+        context=AgentContext(user_id=request.user_id, file_uploads=None)
     )
+    
+    # Manually populate metadata for legacy calls
+    supervisor_req.input.metadata.extra = {
+        "goal": request.goal,
+        "target_apps": request.target_apps
+    }
     
     response = await handle_start_monitoring(supervisor_req)
     return {"status": "success" if response.status == "success" else "error", "data": response.output.result if response.output else None}
@@ -701,7 +744,7 @@ async def legacy_agent_test(request: AgentInputModel):
     """Legacy endpoint for testing analysis."""
     try:
         input_data = json.loads(request.agent_input_json)
-        analysis = analyze_focus(input_data, execute_intervention=True)
+        analysis = await analyze_focus(input_data, execute_intervention=True)
         return {"status": "success", "analysis": analysis}
     except Exception as e:
         return {"status": "error", "message": str(e)}

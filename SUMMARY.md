@@ -5,6 +5,7 @@
 - Added lightweight general-query handling: supervisor now answers greetings/date/time locally and returns a generic refusal on abusive text before calling agents.
 - Added tasks view: backend proxy to the knowledge base tasks endpoint and a `/tasks` page with card-based task display, linked from the dashboard.
 - Enhanced tasks page with client-side sorting (by ID, due date, or execution order) and richer task metadata (order, dependencies, deadlines).
+- Task dependency results are now rewritten server-side: when the dependency agent responds, the supervisor fetches task names from the knowledge base and returns a bullet list of execution-order tasks and those with dependencies, instead of raw JSON.
 - Documented repository practices in `AGENTS.md` to reflect the new structure and React UI, including dev commands and style expectations.
 - Initialized git, added `.gitignore`, merged remote history (README additions) with `--allow-unrelated-histories`, and pushed to `main`.
 - Updated `origin` to `https://github.com/Huzaifa-2669/Supervisor-Integration-Agent.git`.

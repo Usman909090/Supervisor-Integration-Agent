@@ -38,7 +38,7 @@ STYLES = """
           .shell {
             max-width: 1100px;
             margin: 0 auto;
-            padding: 48px 12px 100px;
+            padding: 56px 18px 110px;
             position: relative;
           }
           /* Ambient sparkles */
@@ -74,30 +74,30 @@ STYLES = """
             background: rgba(11,18,32,0.9);
             border: 1px solid var(--border);
             border-radius: 18px;
-            padding: 20px;
+            padding: 28px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.35);
           }
           .chat {
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 16px;
           }
           .chat-feed {
             background: var(--panel);
             border: 1px solid var(--border);
             border-radius: 14px;
-            padding: 14px;
-            min-height: 320px;
-            max-height: 520px;
+            padding: 18px;
+            min-height: 360px;
+            max-height: 560px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 12px;
           }
           .msg {
-            max-width: 80%;
-            padding: 12px 14px;
-            border-radius: 14px;
+            max-width: 82%;
+            padding: 14px 16px;
+            border-radius: 16px;
             background: var(--card);
             border: 1px solid var(--border);
             box-shadow: 0 10px 30px rgba(0,0,0,0.25);
@@ -113,24 +113,25 @@ STYLES = """
           }
           .input-bar {
             display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 12px;
-            align-items: center;
+            grid-template-columns: 1fr 220px;
+            gap: 16px;
+            align-items: stretch;
             background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 10px;
+            border-radius: 16px;
+            padding: 14px;
           }
           textarea {
             width: 100%;
-            min-height: 140px;
+            min-height: 150px;
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: 14px;
             color: var(--text);
-            padding: 14px;
+            padding: 16px;
             resize: vertical;
             font-size: 15px;
+            line-height: 1.6;
           }
           .controls {
             display: flex; align-items: center; gap: 14px; margin-top: 12px; flex-wrap: wrap;
@@ -153,7 +154,7 @@ STYLES = """
           .file-input:hover { border-color: var(--accent); transform: translateY(-1px); }
           .file-input::-webkit-file-upload-button { background: linear-gradient(120deg, #22d3ee, #22c55e); border: none; border-radius: 999px; padding: 8px 12px; color: #0b1220; font-weight: 700; cursor: pointer; }
           .file-meta { color: var(--muted); font-size: 13px; }
-          .file-trigger { background: var(--panel); border: 1px solid var(--border); padding: 10px 12px; border-radius: 12px; color: var(--text); cursor: pointer; transition: border 120ms ease, transform 120ms ease; text-align: center; }
+          .file-trigger { background: var(--panel); border: 1px solid var(--border); padding: 12px 14px; border-radius: 12px; color: var(--text); cursor: pointer; transition: border 120ms ease, transform 120ms ease; text-align: center; }
           .file-trigger:hover { border-color: var(--accent); transform: translateY(-1px); }
           button.primary {
             background: linear-gradient(120deg, #22d3ee, #22c55e);
@@ -504,7 +505,7 @@ def render_home() -> HTMLResponse:
             const [status, setStatus] = useState('');
             const [error, setError] = useState(null);
             const [openIntermediate, setOpenIntermediate] = useState(false);
-            const [fileNames, setFileNames] = useState([]);
+            const [fileName, setFileName] = useState('');
             const [uploadedFiles, setUploadedFiles] = useState([]);
             const chatRef = React.useRef(null);
             const fileInputRef = React.useRef(null);
@@ -541,7 +542,7 @@ def render_home() -> HTMLResponse:
               setUsedAgents([]);
               setIntermediate({});
               setError(null);
-              setFileNames([]);
+              setFileName('');
               setUploadedFiles([]);
             };
 
@@ -581,7 +582,7 @@ def render_home() -> HTMLResponse:
                 setError(data.error);
                 setMessages((prev) => [...prev, { role: 'assistant', content: data.answer || 'No answer produced.' }]);
                 setUploadedFiles([]);
-                setFileNames([]);
+                setFileName('');
               } catch (err) {
                 setStatus('');
                 setError({ message: 'Network error', type: 'network_error' });
@@ -590,101 +591,101 @@ def render_home() -> HTMLResponse:
             };
 
             const handleFileUpload = (e) => {
-              const files = Array.from(e.target.files);
-              if (files.length === 0) return;
+              const file = e.target.files[0];
+              if (!file) return;
               
-              const names = files.map(f => f.name);
-              setFileNames(names);
-              setStatus(`Reading ${files.length} file(s)...`);
+              setFileName(file.name);
+              setStatus('Reading file...');
               
-              let processedFiles = [];
-              let textContent = '';
-              let filesProcessed = 0;
+              const isTextFile = file.type.startsWith('text/') || 
+                                 file.name.endsWith('.txt') || 
+                                 file.name.endsWith('.md') || 
+                                 file.name.endsWith('.json') || 
+                                 file.name.endsWith('.csv') || 
+                                 file.name.endsWith('.log');
               
-              const processFile = (file) => {
-                return new Promise((resolve, reject) => {
-                  const isTextFile = file.type.startsWith('text/') || 
-                                     file.name.endsWith('.txt') || 
-                                     file.name.endsWith('.md') || 
-                                     file.name.endsWith('.json') || 
-                                     file.name.endsWith('.csv') || 
-                                     file.name.endsWith('.log');
-                  
-                  const isPDF = file.type === 'application/pdf' || file.name.endsWith('.pdf');
-                  const isDOCX = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
-                                file.name.endsWith('.docx');
-                  
-                  const reader = new FileReader();
-                  
-                  reader.onerror = () => reject(new Error('Failed to read file'));
-                  
-                  if (isTextFile) {
-                    reader.onload = (event) => {
-                      textContent += `\n\n--- ${file.name} ---\n${event.target.result}`;
-                      resolve();
-                    };
-                    reader.readAsText(file);
-                  } else if (isPDF || isDOCX) {
-                    reader.onload = (event) => {
-                      const dataUrl = event.target.result;
-                      const base64 = dataUrl.split(',')[1];
-                      const mimeType = isPDF ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-                      
-                      processedFiles.push({
-                        base64_data: base64,
-                        filename: file.name,
-                        mime_type: mimeType
-                      });
-                      resolve();
-                    };
-                    reader.readAsDataURL(file);
-                  } else {
-                    reject(new Error(`File type ${file.type || 'unknown'} not supported`));
-                  }
-                });
+              const isPDF = file.type === 'application/pdf' || file.name.endsWith('.pdf');
+              const isDOCX = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+                            file.name.endsWith('.docx');
+              
+              const reader = new FileReader();
+              
+              reader.onerror = () => {
+                setStatus('');
+                setError({ message: 'Failed to read file', type: 'file_error' });
+                setFileName('');
+                setUploadedFiles([]);
               };
               
-              Promise.all(files.map(processFile))
-                .then(() => {
-                  setStatus('');
-                  
-                  if (processedFiles.length > 0) {
-                    setUploadedFiles(processedFiles);
-                  } else if (textContent) {
-                    setUploadedFiles([]);
-                    const defaultPrompt = 'Summarize our project status and flag any deadline risks.';
-                    if (!input.trim() || input === defaultPrompt) {
-                      setInput(`Summarize these documents:${textContent}`);
-                    } else {
-                      setInput(`${input}${textContent}`);
-                    }
+              if (isTextFile) {
+                reader.onload = (event) => {
+                  const fileContent = event.target.result;
+                  if (!input.trim() || input === 'Summarize our project status and flag any deadline risks.') {
+                    setInput(`Summarize this document:
+
+${fileContent}`);
+                  } else {
+                    setInput(`${input}
+
+--- Document Content ---
+
+${fileContent}`);
                   }
-                })
-                .catch((err) => {
                   setStatus('');
-                  setError({ message: err.message || 'Failed to process files', type: 'file_error' });
-                  setFileNames([]);
                   setUploadedFiles([]);
-                });
+                };
+                reader.readAsText(file);
+              } else if (isPDF || isDOCX) {
+                reader.onload = (event) => {
+                  const dataUrl = event.target.result;
+                  const base64 = dataUrl.split(',')[1];
+                  const mimeType = isPDF ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                  
+                  setUploadedFiles([{
+                    base64_data: base64,
+                    filename: file.name,
+                    mime_type: mimeType
+                  }]);
+                  
+                  if (!input.trim() || input === 'Summarize our project status and flag any deadline risks.') {
+                    setInput('Summarize the attached document');
+                  } else if (!input.toLowerCase().includes('summarize') && !input.toLowerCase().includes('document')) {
+                    setInput(`${input}
+
+Summarize the attached document`);
+                  }
+                  setStatus('');
+                };
+                reader.readAsDataURL(file);
+              } else {
+                setStatus('');
+                setError({ message: `File type ${file.type || 'unknown'} not supported. Supported: text files, PDF, DOCX.`, type: 'file_error' });
+                setFileName('');
+                setUploadedFiles([]);
+              }
             };
 
             return (
               <div className="panel">
-                <div className="hero">
+                <div className="hero" style={{ gap: 6, alignItems: 'flex-start' }}>
                   <div className="badge">Supervisor · Multi-Agent Orchestrator</div>
                   <div>
-                    <h1 style={{ margin: '4px 0 6px' }}>Chat with the supervisor.</h1>
-                    <p className="small">Send messages, see responses, and inspect which worker agents were used per turn.</p>
+                    <h1 style={{ margin: '0 0 6px' }}>Chat with the supervisor.</h1>
+                    <p className="small" style={{ maxWidth: 720 }}>A focused chat workspace: ask your question, attach files, inspect agent calls, and keep the flow moving.</p>
                   </div>
                 </div>
 
                 <div className="chat">
-                  <div className="input-controls">
-                    <label className="switch">
-                      <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} />
-                      <span className="slider"></span>
-                      <span>Show debug</span>
-                    </label>
+                  <div className="input-controls" style={{ justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <label className="switch">
+                        <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} />
+                        <span className="slider"></span>
+                        <span>Show debug</span>
+                      </label>
+                      <span className="small" style={{ color: 'var(--muted)' }}>Tip: Keep requests concise; add context via file upload.</span>
+                    </div>
+                    {status && <span className="status"><span className="status-dot"></span>{status}</span>}
                   </div>
 
                   <div className="chat-feed" id="chat-feed" ref={chatRef}>
@@ -703,14 +704,13 @@ def render_home() -> HTMLResponse:
 
                   <div className="input-bar">
                     <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Type your message..." rows={3} />
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      <input ref={fileInputRef} type="file" style={{ display: 'none' }} accept=".txt,.md,.json,.csv,.log,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={handleFileUpload} />
+                      <button type="button" className="file-trigger" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Attach file</button>
                       <button className="primary" onClick={handleSend} style={{ padding: '12px 18px' }}>Send</button>
-                      <input ref={fileInputRef} type="file" style={{ display: 'none' }} accept=".txt,.md,.json,.csv,.log,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={handleFileUpload} multiple />
-                      <button type="button" className="file-trigger" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Choose file(s)</button>
-                      {fileNames.length > 0 && <span className="file-meta">Attached: {fileNames.join(', ')}</span>}
+                      {error && <div className="small" style={{ color: '#f87171' }}>Error: {error.message}</div>}
                     </div>
                   </div>
-                  {error && <div className="small" style={{ color: '#f87171' }}>Error: {error.message}</div>}
                 </div>
 
                 <div style={{ marginTop: 18 }}>
