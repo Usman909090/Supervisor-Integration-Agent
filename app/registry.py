@@ -73,11 +73,12 @@ def load_registry() -> List[AgentMetadata]:
         ),
         AgentMetadata(
             name="deadline_guardian_agent",
-            description="Monitors deadlines, detects risks, and alerts when deadlines are at risk.",
+            description="AI-powered deadline monitoring with dependency analysis. Identifies cascading risks, bottlenecks, and blocked tasks using Google Gemini Flash 2.0. Provides strategic recommendations for clearing bottlenecks and managing overdue tasks.",
             intents=["deadline.monitor"],
             type="http",
-            endpoint="https://example.com/deadline/handle",
-            healthcheck="https://example.com/deadline/health",
+            endpoint="https://deadlinegaurdianagent-production.up.railway.app/handle",
+            healthcheck="https://deadlinegaurdianagent-production.up.railway.app/health",
+            timeout_ms=30000,
         ),
     ]
 
