@@ -298,11 +298,8 @@ def plan_tools_with_llm(query: str, registry: List[AgentMetadata], history: Opti
         "budget control", "financial management", "expense management",
     ]
     
-    # If query contains budget keywords AND overspending/risk context, route to budget tracker
-    # This catches queries like "analyze risks for overspending" even if they contain "risk"
-    if any(keyword in budget_keywords for keyword in budget_keywords) and (
-        "overspending" in lower_q or "spending" in lower_q or "budget" in lower_q or "financial" in lower_q
-    ):
+    # If query contains budget keywords, route to budget tracker
+    if any(keyword in lower_q for keyword in budget_keywords):
         # Since the agent handles intent detection internally, we can use a default intent
         # or let the agent determine it. Using budget.question as default.
         # The agent will parse the query and determine the correct intent.
@@ -312,6 +309,98 @@ def plan_tools_with_llm(query: str, registry: List[AgentMetadata], history: Opti
                     step_id=0,
                     agent="budget_tracker_agent",
                     intent="budget.question",  # Default - agent will determine actual intent
+                    input_source="user_query",
+                )
+            ]
+        )
+    
+    # Productivity agent – detailed routing
+    # Create goal
+    if any(k in lower_q for k in ["create goal", "new goal", "add goal"]):
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="goal.create",
+                    input_source="user_query",
+                )
+            ]
+        )
+
+    # Update goal progress
+    if any(k in lower_q for k in ["update goal", "goal progress", "progress update"]):
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="goal.update",
+                    input_source="user_query",
+                )
+            ]
+        )
+
+    # Add reflection / journaling
+    if any(k in lower_q for k in ["add reflection", "journal", "daily log", "reflection", "wrote"]):
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="reflection.add",
+                    input_source="user_query",
+                )
+            ]
+        )
+
+    # Insights
+    if "insight" in lower_q:
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="productivity.insights",
+                    input_source="user_query",
+                )
+            ]
+        )
+
+    # Accountability
+    if "accountability" in lower_q:
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="productivity.accountability",
+                    input_source="user_query",
+                )
+            ]
+        )
+
+    # General analysis (default intent)
+    if any(k in lower_q for k in ["analysis", "analyze", "trend", "pattern"]):
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="productivity.analyze",
+                    input_source="user_query",
+                )
+            ]
+        )
+
+    # Report generation
+    if "report" in lower_q:
+        return Plan(
+            steps=[
+                PlanStep(
+                    step_id=0,
+                    agent="productivity_agent",
+                    intent="productivity.report",
                     input_source="user_query",
                 )
             ]
